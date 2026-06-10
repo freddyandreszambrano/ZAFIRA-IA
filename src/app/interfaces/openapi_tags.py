@@ -1,0 +1,2 @@
+OPENAPI_TAG_AVATAR = "avatar"
+OPENAPI_TAG_TRYON = "tryon"
