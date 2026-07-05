@@ -7,6 +7,7 @@ from app.application.use_cases.get_health import GetHealthUseCase
 from app.application.use_cases.tryon.generate import GenerateTryOnUseCase
 from app.config import Settings, get_settings
 from app.infrastructure.ai.base import AvatarModel, TryOnModel
+from app.infrastructure.ai.gemini import GeminiAvatarModel, GeminiImageClient, GeminiTryOnModel
 from app.infrastructure.ai.hosted import (
     HostedAvatarModel,
     HostedPredictionClient,
@@ -56,6 +57,17 @@ def _hosted_client(
     )
 
 
+def _gemini_client(settings: Settings) -> GeminiImageClient:
+    if not settings.gemini_api_key:
+        raise RuntimeError("AI_BACKEND=gemini requires GEMINI_API_KEY")
+    return GeminiImageClient(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+        base_url=settings.gemini_base_url,
+        timeout_seconds=settings.gemini_timeout_seconds,
+    )
+
+
 @lru_cache
 def get_avatar_model() -> AvatarModel:
     settings = get_settings()
@@ -63,6 +75,8 @@ def get_avatar_model() -> AvatarModel:
         return HostedAvatarModel(
             client=_hosted_client(settings, settings.avatar_model_ref, "AVATAR_MODEL_REF")
         )
+    if settings.ai_backend == "gemini":
+        return GeminiAvatarModel(client=_gemini_client(settings))
     return StubAvatarModel()
 
 
@@ -73,6 +87,8 @@ def get_tryon_model() -> TryOnModel:
         return HostedTryOnModel(
             client=_hosted_client(settings, settings.tryon_model_ref, "TRYON_MODEL_REF")
         )
+    if settings.ai_backend == "gemini":
+        return GeminiTryOnModel(client=_gemini_client(settings))
     return StubTryOnModel()
 
 
