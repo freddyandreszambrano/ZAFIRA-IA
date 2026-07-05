@@ -48,14 +48,15 @@ concrete classes to interfaces** — add new backends there. AI model factories 
 
 ## Key conventions & gotchas
 
-- **HMAC auth**: every `/api/v1/*` route depends on `verify_hmac_request`. Signature is
-  `hex(HMAC-SHA256(raw_body_bytes + timestamp, secret))` over three headers
-  (`X-CLIENT-ID`, `X-TIMESTAMP`, `X-SIGNATURE`). Sign the **exact raw body bytes** — any
-  JSON re-serialization breaks it. The app **fails to start** (in lifespan) if
-  `HMAC_ALLOWED_CLIENTS` is missing/invalid; there is no default client/secret.
+- **Auth desconectada (temporal)**: los routers `/api/v1/*` NO exigen autenticación;
+  ZAFIRA-CORE llama directo por localhost. El verificador HMAC sigue disponible en
+  `infrastructure/security/hmac_verifier.py` + `interfaces/security/hmac_auth.py`
+  (dormant, sin cablear). Para reactivarlo: volver a agregar
+  `dependencies=[Depends(verify_hmac_request)]` en los routers y el fail-fast de
+  `load_allowed_clients` en el lifespan de `main.py`.
 - **Error handling**: raise `DomainError(msg, code)` from any layer. The handler in
   `main.py` converts it to HTTP `422` with `{"detail", "code"}`. Don't raise `HTTPException`
-  from use cases or infrastructure (HMAC auth is the exception, by design at the edge).
+  from use cases or infrastructure.
 - **AI backends**: `stub` (default) is passthrough — returns the input image unchanged,
   exercising the full fetch→model→upload pipeline. `hosted` is a Replicate-style skeleton;
   wiring a real model means filling the `TODO`s in `infrastructure/ai/hosted.py` (input

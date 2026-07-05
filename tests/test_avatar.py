@@ -5,7 +5,6 @@ import base64
 from fastapi.testclient import TestClient
 
 from app.interfaces.dependencies import get_image_fetcher, get_storage_client
-from app.interfaces.security.hmac_auth import verify_hmac_request
 from app.main import app
 from tests.conftest import FakeImageFetcher, InMemoryStorage
 
@@ -16,7 +15,6 @@ def test_generate_avatar_happy_path() -> None:
     fetcher = FakeImageFetcher(payload=b"selfie-bytes")
     storage = InMemoryStorage()
 
-    app.dependency_overrides[verify_hmac_request] = lambda: None
     app.dependency_overrides[get_image_fetcher] = lambda: fetcher
     app.dependency_overrides[get_storage_client] = lambda: storage
 
@@ -45,29 +43,21 @@ def test_generate_avatar_happy_path() -> None:
 
 
 def test_invalid_source_url_rejected() -> None:
-    app.dependency_overrides[verify_hmac_request] = lambda: None
-    try:
-        response = client.post(
-            "/api/v1/avatar",
-            json={"external_ref": "x", "source_image_url": "not-a-url"},
-        )
-    finally:
-        app.dependency_overrides.clear()
+    response = client.post(
+        "/api/v1/avatar",
+        json={"external_ref": "x", "source_image_url": "not-a-url"},
+    )
 
     assert response.status_code == 422
 
 
 def test_external_ref_with_path_segments_rejected() -> None:
-    app.dependency_overrides[verify_hmac_request] = lambda: None
-    try:
-        response = client.post(
-            "/api/v1/avatar",
-            json={
-                "external_ref": "../../etc/passwd",
-                "source_image_url": "https://media.example.com/selfie.jpg",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
+    response = client.post(
+        "/api/v1/avatar",
+        json={
+            "external_ref": "../../etc/passwd",
+            "source_image_url": "https://media.example.com/selfie.jpg",
+        },
+    )
 
     assert response.status_code == 422
