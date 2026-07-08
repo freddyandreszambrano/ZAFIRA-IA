@@ -24,6 +24,10 @@ TRYON_PROMPT_TEMPLATE = (
     "shows a model, mannequin, face, head, hands or any other person, completely "
     "ignore and discard them — do NOT transfer any facial features, skin or body "
     "from IMAGE 2 onto the result.\n"
+    "If IMAGE 2 shows the model wearing SEVERAL layered garments (for example a "
+    "jacket or coat over a shirt or t-shirt), the target garment is the "
+    "OUTERMOST, TOP layer (the jacket/coat) — extract that one and IGNORE any "
+    "inner shirt, t-shirt or top visible underneath it.\n"
     "Output: the person from IMAGE 1, unchanged, now wearing the extracted "
     "{garment_label} garment INSTEAD OF their current {garment_label} clothing. "
     "CRITICAL: first completely REMOVE the person's original {garment_label} "
@@ -85,7 +89,9 @@ class GeminiImageClient:
         self._timeout = timeout_seconds
         self._transport = transport
 
-    async def generate(self, *, prompt: str, images: list[bytes]) -> bytes:
+    async def generate(
+        self, *, prompt: str, images: list[bytes], temperature: float = 0.35
+    ) -> bytes:
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for image in images:
             parts.append(
@@ -106,7 +112,7 @@ class GeminiImageClient:
                     # Temperatura media-baja: equilibrio entre fidelidad (no
                     # alterar prendas ajenas) y accion (no devolver la imagen
                     # sin aplicar la prenda nueva)
-                    "generationConfig": {"temperature": 0.35},
+                    "generationConfig": {"temperature": temperature},
                 },
                 headers={"x-goog-api-key": self._api_key},
             )
@@ -138,6 +144,30 @@ class GeminiImageClient:
         )
 
 
+def _mean_diff(a: bytes, b: bytes) -> float:
+    """Diferencia media de pixeles (0-255) entre dos imagenes reducidas a
+    64x64 gris. ~0 = practicamente identicas (la prenda no se aplico)."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    def thumb(data: bytes):
+        return Image.open(BytesIO(data)).convert("L").resize((64, 64))
+
+    try:
+        ia, ib = thumb(a), thumb(b)
+    except Exception:
+        return 255.0  # si no se puede comparar, asumir que cambio (no reintentar)
+    pa, pb = ia.load(), ib.load()
+    total = sum(abs(pa[x, y] - pb[x, y]) for x in range(64) for y in range(64))
+    return total / (64 * 64)
+
+
+# Debajo de este umbral la salida es casi identica a la entrada: la prenda
+# no se aplico (no-op) y conviene reintentar una vez.
+_NOOP_DIFF_THRESHOLD = 3.0
+
+
 class GeminiTryOnModel:
     def __init__(self, *, client: GeminiImageClient) -> None:
         self._client = client
@@ -152,7 +182,24 @@ class GeminiTryOnModel:
     ) -> bytes:
         label = _GARMENT_LABELS.get(garment_type, "upper-body")
         prompt = params.get("prompt") or TRYON_PROMPT_TEMPLATE.format(garment_label=label)
-        return await self._client.generate(prompt=prompt, images=[person_image, garment_image])
+
+        result = await self._client.generate(
+            prompt=prompt, images=[person_image, garment_image]
+        )
+        # Guardia anti no-op: si la prenda no se aplico (salida casi identica a
+        # la foto de entrada), reintentar UNA vez con mas temperatura para
+        # forzar un resultado distinto.
+        base_diff = _mean_diff(result, person_image)
+        if base_diff < _NOOP_DIFF_THRESHOLD:
+            retry = await self._client.generate(
+                prompt=prompt,
+                images=[person_image, garment_image],
+                temperature=0.7,
+            )
+            # Quedarse con el reintento solo si de verdad cambio algo mas
+            if _mean_diff(retry, person_image) >= base_diff:
+                result = retry
+        return result
 
 
 class GeminiAvatarModel:
