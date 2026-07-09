@@ -35,19 +35,32 @@ TRYON_PROMPT_TEMPLATE = (
     "NOT remain visible under, over or behind the new one — no layering, no "
     "stacking. If the new garment covers less skin than the original (e.g. "
     "shorts replacing long pants, or a t-shirt replacing a jacket), render the "
-    "newly exposed skin naturally. Replace ONLY the {garment_label} clothing. "
-    "ALL other clothing the person wears (shirts, pants, shoes, accessories) "
-    "must remain EXACTLY as in IMAGE 1 — same fit, same color, same shape, "
-    "pixel-faithful, with no restyling or redesign whatsoever.\n"
+    "newly exposed skin naturally: the old garment must be FULLY gone, with no "
+    "cuffs, hems, waistband, sleeves or fabric of the original peeking out "
+    "below, above or beside the new one. Replace ONLY the {garment_label} "
+    "clothing. ALL other clothing the person wears (shirts, pants, shoes, "
+    "accessories) must remain EXACTLY as in IMAGE 1 — same fit, same color, "
+    "same shape, pixel-faithful, with no restyling or redesign whatsoever.\n"
+    "FOOTWEAR & ACCESSORIES: never add, remove, swap, recolor or restyle the "
+    "person's shoes, socks, hat, cap, bag, belt, watch, glasses or any "
+    "accessory — keep them EXACTLY as in IMAGE 1. If IMAGE 2 shows the garment "
+    "on a model wearing shoes or accessories, IGNORE those completely and do "
+    "NOT copy them onto the person. Do not invent footwear or accessories that "
+    "are not already present in IMAGE 1.\n"
     "MANDATORY: the new {garment_label} garment from IMAGE 2 MUST be clearly "
     "and visibly worn by the person in the output. Returning IMAGE 1 "
     "unchanged, or with the person still wearing their original "
     "{garment_label} clothing, is an INCORRECT result — the garment swap must "
     "always happen. This applies EVEN IF the new garment is the same kind of "
-    "clothing the person already wears (e.g. swapping jeans for different "
-    "jeans): you must still perform the replacement and accurately reproduce "
-    "the exact color, wash, fit and details of the garment in IMAGE 2, not "
-    "keep the original one. Return only the final image."
+    "clothing OR the same color as what the person already wears (e.g. "
+    "swapping jeans for different jeans, or putting a white shirt over an "
+    "existing white shirt): you must still perform the replacement and "
+    "accurately reproduce the exact color, wash, cut, collar, neckline, "
+    "sleeve length, fit and fabric details of the garment in IMAGE 2, not "
+    "keep the original one. When the current and new garments look similar "
+    "(same colour or same type), pay special attention to the differences in "
+    "cut, collar and sleeve length so that the swap is clearly visible in the "
+    "output. Return only the final image."
 )
 
 AVATAR_PROMPT = (
@@ -181,7 +194,47 @@ class GeminiTryOnModel:
         params: dict[str, Any],
     ) -> bytes:
         label = _GARMENT_LABELS.get(garment_type, "upper-body")
-        prompt = params.get("prompt") or TRYON_PROMPT_TEMPLATE.format(garment_label=label)
+        prompt = params.get("prompt")
+        if not prompt:
+            prompt = TRYON_PROMPT_TEMPLATE.format(garment_label=label)
+            # Vestido / enterizo: sustituye TOP y BOTTOM a la vez. Sin esta
+            # regla, el prompt asume que la persona ya lleva un vestido y
+            # falla cuando lleva blusa + pantalón (Gemini no sabe qué quitar
+            # y devuelve la foto sin cambios).
+            if garment_type == "dress":
+                prompt += (
+                    f"\nSPECIAL RULE: the new {label} from IMAGE 2 is a "
+                    f"one-piece garment that covers the full body. Remove "
+                    f"the person's current upper clothing COMPLETELY — "
+                    f"including the body, the collar/neckline, AND the "
+                    f"sleeves (long, three-quarter or short) of their "
+                    f"shirt, blouse, t-shirt, top, cardigan or sweater — "
+                    f"AND their current lower clothing (pants, jeans, "
+                    f"skirt, shorts) SIMULTANEOUSLY. Dress them entirely "
+                    f"with the new {label}. CRITICAL: if the new {label} "
+                    f"has thin straps, short sleeves or no sleeves, the "
+                    f"person's arms, shoulders and neckline must appear as "
+                    f"BARE SKIN in every part the new dress does not "
+                    f"cover — NEVER as leftover sleeves, cuffs or collar "
+                    f"from the old top (a common mistake is keeping long "
+                    f"sleeves on the arms when the new dress is "
+                    f"sleeveless: this is INCORRECT and must not happen). "
+                    f"No trace of the original top or bottom must remain "
+                    f"visible: no collar, no sleeves (short or long), no "
+                    f"cuffs, no waistband, no hem or fabric of the old "
+                    f"clothes peeking out anywhere. The final image must "
+                    f"show ONLY the new {label} on the person, with bare "
+                    f"skin wherever the dress does not reach."
+                )
+            # El nombre real de la prenda enfoca a Gemini en aplicarla y reduce
+            # el no-op (devolver la foto sin cambios) y el aplicar la prenda
+            # equivocada. Solo se agrega cuando ZAFIRA-CORE envia garment_des.
+            garment_des = str(params.get("garment_des") or "").strip()
+            if garment_des:
+                prompt += (
+                    f'\nThe specific {label} garment to apply, taken from IMAGE 2, '
+                    f'is: "{garment_des}". Reproduce that exact garment on the person.'
+                )
 
         result = await self._client.generate(
             prompt=prompt, images=[person_image, garment_image]
